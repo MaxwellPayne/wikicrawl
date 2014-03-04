@@ -1,5 +1,5 @@
 import requests, bs4, re, random
-import getopt, os, sys, collections
+import getopt, os, sys, collections, csv
 from time import sleep
 
 
@@ -60,7 +60,10 @@ def randWikiStart(titleFilePath):
 	return unicode('http://wikipedia.org/wiki/') + urllib.quote(wikiWord.encode('UTF-8'))
 	# return a unicode, url-safe url
 
+def csvHeadersExist(pth, headerLs, delimiter=','):
 
+	with open(pth, 'r') as f:
+		return f.readline().rstrip().split(delimiter) == headerLs
 
 class CrawlError(Exception):
 	"""Wikipedia crawler has encountered a page that doesn't hold a valid link to any other Wikipedia page"""
@@ -75,16 +78,17 @@ class CrawlRecord(object):
 	"""Records data about the crawl of a given wikipedia page"""
 
 	def __init__(self, url, word, nth):
-		self.url = url
+		self.urlExtension = url
 		self.word = word
 		self.nth = nth
 
 	def __repr__(self):
-		return 'CrawlRecord URL: %s, word %s, nth %s' % (self.url, self.word, self.nth)
+		return 'CrawlRecord URL: %s, word %s, nth %s' % (self.urlExtension, self.word, self.nth)
 
 	def listForCSV(self):
 		"""Create list of properties the way they will be written to the CSV columns"""
-		return [self.nth, self.word, self.url]
+		# hash value of self.word will produce unique primary key
+		return [hash(self.urlExtension), self.word, self.url]
 
 
 class WikiCrawl(object):
@@ -197,7 +201,7 @@ class WikiCrawl(object):
 			nextLink = self.nextWikiLink(self.currentPage)
 			# grab the next link from the current page
 
-			record = CrawlRecord(self.currentURL, 
+			record = CrawlRecord(self.stripWikiURL(self.currentURL), 
 									self.wikiTitle(self.currentPage),
 									self._nthSeen)
 			# create a record using the url just searched, title currently seen, and n
@@ -229,12 +233,49 @@ class WikiCrawl(object):
 				# sleep to abide by robots.txt
 			
 
+
+
+	def _csvPath(self, fileName = None, directory = ''):
+
+		if fileName: return fileName.replace('.csv', '') + '.csv'
+		# if name passed, use it; else name output first word seen by default
+		else: return self._visitedURLs[self.stripWikiURL(self.startURL)].word + '.csv'
+
+
+
+	def summaryCSV(self, fileName = None, directory = '', delim = ','):
+
+		pth = self._csvPath(fileName, directory)
+		headers = ['URL ID', 'Start Word', 'End Word', 'Number of Jumps']
+
+		row = map(lambda record: record.word, self._visitedURLs.values())
+
+		if self._infRecord: row = row.append(self._infRecord)
+
+		with open(pth, 'a') as f:
+			excelWriter = csv.writer(f, delimiter = delim)
+			if os.path.getsize(pth) == 0):
+				excelWriter.writeRow(headers)
+			excelWriter.writeRow(row)
+
+
+
+	def verboseCSV(self, fileName = None, directory = '', delim = ','):
+
+		pth = self._csvPath(fileName, directory)
+
+		visited = self._visitedURLs.values()
+
+		first, last = visited[0], visited[len(visited) - 1]
+
+		row = [hash(first), 
+
 	def writeCSV(self, fileName=None, directory=''):
 		import csv
 		"""FINISHME"""
 
 
-		headers = ['Nth', 'Word', 'URL']
+		headers = ['URL ID', 'Word', 'URL']
 		# csv column headers
 
 		if fileName: name = fileName.replace('.csv', '') + '.csv'
@@ -264,6 +305,14 @@ class WikiCrawl(object):
 
 		return self._visitedURLs
 		# does this really need a return value?
+
+	def flush(self):
+		"""Return all properties to pre-crawl status"""
+		self.currentURL = self.startURL
+		self._visitedURLs = collections.OrderedDict()
+		self.currentPage = None
+		self._nthSeen = 0
+		self._infRecord = None
 
 
 
