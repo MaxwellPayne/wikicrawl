@@ -12,6 +12,8 @@ WikiCrawl.crawl needs to handle hash collisions/infinite loops of links
 CSV Directory handling is shit
 Handle NUM_TRIALS better
 
+STRIP /WIKI/REAL_PAGE#ANCHOR_PART from urls
+
 """
 
 
@@ -93,8 +95,8 @@ class CrawlRecord(object):
 
 class WikiCrawl(object):
 
-	_wikilink_reg = re.compile(r'(/wiki/[^:]+$)')
-	# /wiki/something_without_a_colon
+	_wikilink_reg = re.compile(r'(/wiki/[^:#]+)')
+	# /wiki/something_without_a_colon, until a #anchor is seen
 	# ASSUMPTION: ALL UNDESIRED WIKILINKS CONTAIN A COLON
 	_CRAWL_WAIT_TIME = 1.5
 	# I think robots.txt specifies a 1 second minimum
@@ -243,36 +245,52 @@ class WikiCrawl(object):
 
 
 
-	def summaryCSV(self, fileName = None, directory = '', delim = ','):
+	def verboseCSV(self, fileName = None, directory = '', delim = ','):
+		"""Writes the path of all word seen on a traversal"""
 
 		pth = self._csvPath(fileName, directory)
-		headers = ['URL ID', 'Start Word', 'End Word', 'Number of Jumps']
+		
+		visited = self._visitedURLs.values()
 
-		row = map(lambda record: record.word, self._visitedURLs.values())
+		row = [hash(visited[0])] + map(lambda record: record.word, self._visitedURLs.values())
+		# Array starting with hashval of first word
+		# followed by every single word seen
 
 		if self._infRecord: row = row.append(self._infRecord)
+		# append the inf record to words seen if it has been encountered
 
 		with open(pth, 'a') as f:
 			excelWriter = csv.writer(f, delimiter = delim)
-			if os.path.getsize(pth) == 0):
-				excelWriter.writeRow(headers)
 			excelWriter.writeRow(row)
 
 
-
-	def verboseCSV(self, fileName = None, directory = '', delim = ','):
+	def summaryCSV(self, fileName = None, directory = '', delim = ','):
+		"""Writes startWord hash, startWord, last unique word, numSeen, and infWord if exists"""
 
 		pth = self._csvPath(fileName, directory)
+
+		headers = ['URL ID', 'Start Word', 'End Word', 'Number of Jumps', 'Loop Word']
 
 		visited = self._visitedURLs.values()
 
 		first, last = visited[0], visited[len(visited) - 1]
+		# first word seen and last word seen
+		infSeen = self._infRecord if self._infRecord else 'None'
 
-		row = [hash(first), 
+		row = [hash(first), first, last, self._nthSeen, infSeen]
+
+		with open(pth, 'a') as f:
+			excelWriter = csv.writer(f, delimiter = delim)
+			if os.path.getsize(pth) == 0:
+				excelWriter.writeRow(headers)
+			excelWriter.writeRow(row)
+
 
 	def writeCSV(self, fileName=None, directory=''):
 		import csv
-		"""FINISHME"""
+		"""DEPRECATED"""
+
+		assert False
 
 
 		headers = ['URL ID', 'Word', 'URL']
