@@ -7,12 +7,13 @@ from time import sleep
 
 To do:
 Beware the 404 in WikiCrawl.navigate
-WikiCrawl.nextWikiLink needs to deal with a page that has no good links
+Crawler needs to deal with a page that has no good links
 WikiCrawl.crawl needs to handle hash collisions/infinite loops of links
 CSV Directory handling is shit
 Handle NUM_TRIALS better
+Handle disambiguation case
 
-STRIP /WIKI/REAL_PAGE#ANCHOR_PART from urls
+:) STRIP /WIKI/REAL_PAGE#ANCHOR_PART from urls
 
 """
 
@@ -50,6 +51,7 @@ def chooseRandLn(fPath):
 		return f.readline()
 
 def randWikiStart(titleFilePath):
+	"""DEPRECATED"""
 	"""Reads random line from titleFilePath, converts what it finds to valid
 	wikipedia URL"""
 	import urllib
@@ -95,6 +97,8 @@ class CrawlRecord(object):
 
 class WikiCrawl(object):
 
+	_wikipedia_Root = 'http://wikipedia.org'
+
 	_wikilink_reg = re.compile(r'(/wiki/[^:#]+)')
 	# /wiki/something_without_a_colon, until a #anchor is seen
 	# ASSUMPTION: ALL UNDESIRED WIKILINKS CONTAIN A COLON
@@ -102,9 +106,15 @@ class WikiCrawl(object):
 	# I think robots.txt specifies a 1 second minimum
 
 	
-	def __init__(self, startURL):
+	def __init__(self, startURL = ''):
 
-		self.startURL = startURL
+		if startURL:
+		# initialize with starting URL if present
+			self.startURL = startURL
+		else:
+		# choose a random wiki page
+			self.startURL = self.wiki_random()
+
 		self.currentURL = startURL
 
 		self._visitedURLs = collections.OrderedDict()
@@ -116,6 +126,16 @@ class WikiCrawl(object):
 
 		self._infRecord = None
 		# temporary holding cell for the infinity record if there is one
+
+
+	@classmethod
+	def wiki_randomURL(cls):
+		"""Returns a unicode url of a random wikipedia page"""
+		random_extension = '/wiki/Special:Random'
+
+		randPage = requests.get(cls._wikipedia_Root + random_extension)
+
+		return randPage.url
 
 
 
@@ -130,7 +150,59 @@ class WikiCrawl(object):
 		self.currentPage = bs4.BeautifulSoup(page.text)
 		# soupify request text
 
-	def stripWikiURL(self, wikiURL):
+	@staticmethod
+	def is_disambiguation(bs4Page):
+		"""Is this page a disambiguation?"""
+
+		return bool(bs4Page.find('table', id = 'disambigbox'))
+
+	@staticmethod
+	def linkFinderFunc(bs4Page):
+		"""Higher order abstraction function for seeking link on a given page.
+		Returns a func that will succesfully parse page links, regardless
+		of whether or not that page is a disambiguation"""
+
+		if is_disambiguation(bs4Page):
+
+			def disambigFunc(page):
+				"""FINISHME"""
+				pass
+
+			return disambigFunc
+
+		else:
+
+			def regularPageFunc(page):
+				"""Navigate to (wikipedia 'url'), parse page down to first 'wiki/some_page' <a> tag, 
+				return the matched <a> element's link to the next wikipedia page"""
+
+				# Should I alter parser to ignore 'Taxonomy (from ANCIENT GREEK...) start of article' situations?
+
+
+				paragraphs = page.find("div", id="mw-content-text").findAll("p", recursive=False)
+
+				# find first <p> within body
+				# ASSUMPTION: FIRST <p> WILL COINTAIN WHAT I WANT
+
+				for para in paragraphs:
+
+					matched = para.find("a", recursive=False, href=WikiCrawl._wikilink_reg)
+
+					if matched:
+						break
+				else:
+					raise CrawlError("No valid wikilinks exist on current page")
+
+				# find first <a> within paragraph whose href matched the reg pattern
+
+				return matched.get("href")
+
+			return regularPageFunc
+
+
+	@classmethod
+	def stripWikiURL(cls, wikiURL):
+	#def stripWikiURL(self, wikiURL):
 		"""Given part or whole wikiURL, returns the /wiki/... portion.
 		Raises exception if wikiURL does not match pattern"""
 
@@ -138,7 +210,7 @@ class WikiCrawl(object):
 
 		#print 'findall %s' % str(WikiCrawl._wikilink_reg.findall(wikiURL, re.I))
 
-		stripped = WikiCrawl._wikilink_reg.search(wikiURL)
+		stripped = cls._wikilink_reg.search(wikiURL)
 
 		#print 'stripped search %s' % str(stripped)
 
@@ -147,13 +219,17 @@ class WikiCrawl(object):
 		if stripped: return stripped.groups()[0]
 		else: raise CrawlError("URL doesn't match /wiki/... pattern")
 
-	def URLifyWikiExtension(self, urlExtension):
+	@classmethod
+	def URLifyWikiExtension(cls, urlExtension):
+	#def URLifyWikiExtension(self, urlExtension):
 		"""Return urlExtension as a valid http://... wikipedia URL"""
 
-		return unicode('http://wikipedia.org' + self.stripWikiURL(urlExtension))
+		return unicode(cls._wikipedia_Root + cls.stripWikiURL(urlExtension))
 
 
-	def wikiTitle(self, bs4Page):
+	@staticmethod
+	def wikiTitle(bs4Page):
+	#def wikiTitle(self, bs4Page):
 		"""Given a bs4 wiki webpage, return the wiki title of the page"""
 
 		header = bs4Page.find("h1", id="firstHeading")
@@ -162,29 +238,8 @@ class WikiCrawl(object):
 
 	
 	def nextWikiLink(self, page):
-		"""Navigate to (wikipedia 'url'), parse page down to first 'wiki/some_page' <a> tag, 
-		return the matched <a> element's link to the next wikipedia page"""
-
-		# Should I alter parser to ignore 'Taxonomy (from ANCIENT GREEK...) start of article' situations?
-
-
-		paragraphs = page.find("div", id="mw-content-text").findAll("p", recursive=False)
-
-		# find first <p> within body
-		# ASSUMPTION: FIRST <p> WILL COINTAIN WHAT I WANT
-
-		for para in paragraphs:
-
-			matched = para.find("a", recursive=False, href=WikiCrawl._wikilink_reg)
-
-			if matched:
-				break
-		else:
-			raise CrawlError("No valid wikilinks exist on current page")
-
-		# find first <a> within paragraph whose href matched the reg pattern
-
-		return matched.get("href")
+		"""DEPRECATED. CONTENTS REASSIGNED TO regularPageFunc OF linkFinderFunc"""
+		pass
 
 	def crawl(self, numRuns):
 		"""Crawl wikipedia numRuns times, store results as CrawlRecords in self._visitedURLs"""
@@ -197,10 +252,13 @@ class WikiCrawl(object):
 			self.navigate(self.currentURL)
 			# navigate changes currentURL to result of navigating last currentURL
 
+			self._nthSeen += 1
+			# increment number of pages seen
+
 			currentURLStripped = self.stripWikiURL(self.currentURL)
 
 
-			nextLink = self.nextWikiLink(self.currentPage)
+			nextLink = self.linkFinderFunc(self.currentPage)(self.currentPage)
 			# grab the next link from the current page
 
 			record = CrawlRecord(self.stripWikiURL(self.currentURL), 
@@ -227,9 +285,6 @@ class WikiCrawl(object):
 
 				self.currentURL = self.URLifyWikiExtension(nextLink)
 				# set the next-current url to the result of this page
-
-				self._nthSeen += 1
-				# increment number of pages seen
 
 				sleep(WikiCrawl._CRAWL_WAIT_TIME)
 				# sleep to abide by robots.txt
@@ -392,7 +447,10 @@ def _run(argv):
 		OSError
 
 	if INPUT_URL: crawler = WikiCrawl(INPUT_URL)
-	else: crawler = WikiCrawl(randWikiStart('enwiki-latest-all-titles-in-ns0'))
+	else: crawler = WikiCrawl()
+
+	#else: crawler = WikiCrawl(randWikiStart('enwiki-latest-all-titles-in-ns0'))
+	"""DEPRECATED b/c no longer using the wiki text file, instead using /wiki/Special:Random"""
 
 	crawler.crawl(NUM_TRIALS)
 
