@@ -8,11 +8,12 @@ from time import sleep
 To do:
 Beware the 404 in WikiCrawl.navigate
 Crawler needs to deal with a page that has no good links
-WikiCrawl.crawl needs to handle hash collisions/infinite loops of links
 CSV Directory handling is shit
 Handle NUM_TRIALS better
-Handle disambiguation case
 
+:/ Handle disambiguation case
+
+:) WikiCrawl.crawl needs to handle hash collisions/infinite loops of links
 :) STRIP /WIKI/REAL_PAGE#ANCHOR_PART from urls
 
 """
@@ -20,6 +21,7 @@ Handle disambiguation case
 
 
 def chunk(fPath, size=65536):
+	"""IRRELEVAT USE OF FILE"""
 	"""Stream the contents of a file size at a time"""
 	if size > 65536:
 		raise ValueError('Too big a chunk size')
@@ -32,6 +34,7 @@ def chunk(fPath, size=65536):
 			else: yield b
 
 def chooseRandLn(fPath):
+	"""IRRELEVAT USE OF FILE"""
 	"""Choose to read a line at random from a text file"""
 
 	numLines = sum([ch.count('\n') for ch in chunk(fPath)])
@@ -51,7 +54,7 @@ def chooseRandLn(fPath):
 		return f.readline()
 
 def randWikiStart(titleFilePath):
-	"""DEPRECATED"""
+	"""IRRELEVAT USE OF FILE"""
 	"""Reads random line from titleFilePath, converts what it finds to valid
 	wikipedia URL"""
 	import urllib
@@ -65,6 +68,7 @@ def randWikiStart(titleFilePath):
 	# return a unicode, url-safe url
 
 def csvHeadersExist(pth, headerLs, delimiter=','):
+	"""Checks to see if a csv file has headers in its first row"""
 
 	with open(pth, 'r') as f:
 		return f.readline().rstrip().split(delimiter) == headerLs
@@ -99,7 +103,8 @@ class WikiCrawl(object):
 
 	_wikipedia_Root = 'http://wikipedia.org'
 
-	_wikilink_reg = re.compile(r'(/wiki/[^:#]+)')
+	_wikilink_reg = re.compile(r'\"(/wiki/[^:]+?)\"')
+
 	# /wiki/something_without_a_colon, until a #anchor is seen
 	# ASSUMPTION: ALL UNDESIRED WIKILINKS CONTAIN A COLON
 	_CRAWL_WAIT_TIME = 1.5
@@ -145,7 +150,11 @@ class WikiCrawl(object):
 		page = requests.get(navURL)
 		# BEWARE THE 404
 		# make request
-		self.currentURL = navURL
+
+		"""self.currentURL = navURL
+		Use request's url in case auto-redirect happened"""
+
+		self.currentURL = page.url
 
 		self.currentPage = bs4.BeautifulSoup(page.text)
 		# soupify request text
@@ -163,10 +172,11 @@ class WikiCrawl(object):
 		of whether or not that page is a disambiguation"""
 
 		if is_disambiguation(bs4Page):
+			# assuming that no disambiguations will happen when you start at :Random
+			# assumption is not yet proven
 
 			def disambigFunc(page):
-				"""FINISHME"""
-				pass
+				raise CrawlError('Hit a disambiguation at %s' % bs4Page.url)
 
 			return disambigFunc
 
@@ -176,15 +186,21 @@ class WikiCrawl(object):
 				"""Navigate to (wikipedia 'url'), parse page down to first 'wiki/some_page' <a> tag, 
 				return the matched <a> element's link to the next wikipedia page"""
 
+				def stripFirstParentheses(bs4Paragraph):
+					"""Remove '(from the Ancient Greek)' text"""
+
+					pass
+
 				# Should I alter parser to ignore 'Taxonomy (from ANCIENT GREEK...) start of article' situations?
 
 
-				paragraphs = page.find("div", id="mw-content-text").findAll("p", recursive=False)
+				contentParagraphs = page.find("div", id="mw-content-text").findAll("p", recursive=False)
 
-				# find first <p> within body
-				# ASSUMPTION: FIRST <p> WILL COINTAIN WHAT I WANT
+				firstParagraph, restParagraphs = contentParagraphs[0], contentParagraphs[1:]
 
-				for para in paragraphs:
+
+
+				for para in contentParagraphs:
 
 					matched = para.find("a", recursive=False, href=WikiCrawl._wikilink_reg)
 
@@ -206,18 +222,37 @@ class WikiCrawl(object):
 		"""Given part or whole wikiURL, returns the /wiki/... portion.
 		Raises exception if wikiURL does not match pattern"""
 
-		#print 'stripping wiki url %s' % wikiURL
 
-		#print 'findall %s' % str(WikiCrawl._wikilink_reg.findall(wikiURL, re.I))
+		URL_ANCHOR_HASH_REG = re.compile(r'#.*$', re.DOTALL)
+		# match the \urlstuff#(anchor_location) portion of a url
 
-		stripped = cls._wikilink_reg.search(wikiURL)
+		stripped = URL_ANCHOR_HASH_REG.subn('', cls._wikilink_reg.search(wikiURL))
+		# find the /wiki/rest#anchor_location portion of a url, then strip
+		# off the #anchor_location
 
-		#print 'stripped search %s' % str(stripped)
-
-		#print 'stripped %s' % str(stripped.groups())
 
 		if stripped: return stripped.groups()[0]
 		else: raise CrawlError("URL doesn't match /wiki/... pattern")
+
+	@classmethod
+	def _isValidInFirstSentence(cls, wikilink, firstSentence):
+		"""Given the first paragraph of bs4Wikipage searches for wikilinks
+		that are not within '(...ancient greek...)' """
+
+		ILLEGAL_FIRSTSENTENCE_REG = lambda link: re.compile( 
+													r""" \( [^)] +?                    # left paren, anything but right paren
+											 		href=\" """ + wikilink + r""" \" # href(equals)"/wiki/topic"
+											 		[^)] *?  </a>[^)] *?  \)""",        # ... </a> ... first left paren seen
+													re.X)                               # verbose regex
+		# illegal formation for a hyperlink in the first sentence of a wikipage
+
+
+		first_sentence = ''
+
+		potentialy_valid_wikilinks = None
+
+		return tuple()
+
 
 	@classmethod
 	def URLifyWikiExtension(cls, urlExtension):
@@ -463,4 +498,32 @@ def _run(argv):
 
 
 _run(sys.argv[1:])
+
+"""
+
+def tagsUntilNavCondition(bs4TagLs, stopTagName, stopCondition, inclusive = True):
+	from itertools import count
+	#Capture all tags in bs4TagLs until you hit a tag of type stopTagName
+	#whose navigable string meets stopCondition
+	tags = []
+	for tag, i in bs4TagLs, count():
+		if i == 100:
+			print tag.string
+		if tag.name == stopTagName and stopCondition(tag.string):
+			tags.append(tag) if inclusive and tag not in tags else None
+			break
+		else:
+			tags.append(tag) if tag not in tags else None
+	return tags
+"""
+
+
+
+
+
+
+
+
+
+
 
