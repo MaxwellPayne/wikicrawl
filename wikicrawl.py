@@ -1,6 +1,7 @@
-import requests, bs4, re, random
+import requests, bs4, re, random, itertools
 import getopt, os, sys, collections, csv
 from time import sleep
+from itertools import count
 
 
 """
@@ -252,6 +253,36 @@ class WikiCrawl(object):
 		potentialy_valid_wikilinks = None
 
 		return tuple()
+
+	@staticmethod
+def indexOfFirstSentence(bs4Paragraph):
+	"""Find the navigable string element's index of the first
+	navigable string that contains a period"""
+	period_reg = re.compile(r'(\.)', re.U)
+	for navstring, index_in_navstrings in zip(bs4Paragraph.strings, count()):
+		# attempt to find a period in every navstring
+		matches = tuple(period_reg.finditer(navstring))
+		# matches will be a tuple of matchobjects
+		if matches:
+			# if period found, return its navstring's index in parent
+			if matches:
+				return charlepara.index(tuple(charlepara.strings)[index_in_navstrings])
+	else:
+		raise ValueError('This paragraph has no periods')
+
+
+		"""
+
+		period_matches = tuple(itertools.chain.from_iterable(
+							map(lambda string: period_reg.finditer(string), bs4Paragraph.strings)))
+		# matchobjects for all periods in the paragraph's navigable strings
+
+		if period_matches:
+			# index of period in
+			return = period_matches[0].start()
+		else: raise ValueError('This paragraph has no periods')
+
+		"""
 
 
 	@classmethod
@@ -516,10 +547,6 @@ def tagsUntilNavCondition(bs4TagLs, stopTagName, stopCondition, inclusive = True
 			tags.append(tag) if tag not in tags else None
 	return tags
 """
-
-
-
-
 
 
 
