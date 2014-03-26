@@ -97,17 +97,20 @@ class CrawlRecord(object):
 	def listForCSV(self):
 		"""Create list of properties the way they will be written to the CSV columns"""
 		# hash value of self.word will produce unique primary key
-		return [hash(self.urlExtension), self.word, self.url]
+		return [hash(self.urlExtension), self.word, self.urlExtension]
 
 
 class WikiCrawl(object):
 
 	_wikipedia_Root = 'http://wikipedia.org'
 
-	_wikilink_reg = re.compile(r'\"(/wiki/[^:]+?)\"')
+	_wikilink_reg = re.compile(r'(/wiki/[^:]+?$)')
+	_href_wikilink_reg = re.compile(r'\"(/wiki/[^:]+?)\"')
 
 	# /wiki/something_without_a_colon, until a #anchor is seen
 	# ASSUMPTION: ALL UNDESIRED WIKILINKS CONTAIN A COLON
+	# ASSUMPTION: ALL CITATIONS ex. superscript^[1],
+				# do not have /wiki/ in their <a href>'s
 	_CRAWL_WAIT_TIME = 1.5
 	# I think robots.txt specifies a 1 second minimum
 
@@ -119,9 +122,9 @@ class WikiCrawl(object):
 			self.startURL = startURL
 		else:
 		# choose a random wiki page
-			self.startURL = self.wiki_random()
+			self.startURL = self.wiki_randomURL()
 
-		self.currentURL = startURL
+		self.currentURL = self.startURL
 
 		self._visitedURLs = collections.OrderedDict()
 		# Myabe OrderedDict so you can see previous and next
@@ -144,7 +147,6 @@ class WikiCrawl(object):
 		return randPage.url
 
 
-
 	def navigate(self, navURL):
 		"""Change the 'current page' and 'current URL' of self to page served by navURL"""
 
@@ -152,13 +154,15 @@ class WikiCrawl(object):
 		# BEWARE THE 404
 		# make request
 
-		"""self.currentURL = navURL
-		Use request's url in case auto-redirect happened"""
-
-		self.currentURL = page.url
 
 		self.currentPage = bs4.BeautifulSoup(page.text)
 		# soupify request text
+
+		self.currentURL = self.URLify(self.currentPage)
+		# grab new url from the page. self.URLify will use the article title
+		# as the new /wiki/{Article_Title} url
+		# --This helps with redirection issues
+
 
 	@staticmethod
 	def is_disambiguation(bs4Page):
@@ -166,13 +170,16 @@ class WikiCrawl(object):
 
 		return bool(bs4Page.find('table', id = 'disambigbox'))
 
-	@staticmethod
-	def linkFinderFunc(bs4Page):
+	@classmethod
+	def linkFinderFunc(cls, bs4Page):
 		"""Higher order abstraction function for seeking link on a given page.
 		Returns a func that will succesfully parse page links, regardless
 		of whether or not that page is a disambiguation"""
 
-		if is_disambiguation(bs4Page):
+		"""MIGHT WANT TO SIMPLY EXECUTE RETURN FUNC RATHER THAN ACTUALLY
+		RETURNING B/C 'BS4PAGE' IS USUALLY USED IN THE CALL TO THE RETURNED FUNC"""
+
+		if cls.is_disambiguation(bs4Page):
 			# assuming that no disambiguations will happen when you start at :Random
 			# assumption is not yet proven
 
@@ -187,23 +194,40 @@ class WikiCrawl(object):
 				"""Navigate to (wikipedia 'url'), parse page down to first 'wiki/some_page' <a> tag, 
 				return the matched <a> element's link to the next wikipedia page"""
 
-				def stripFirstParentheses(bs4Paragraph):
-					"""Remove '(from the Ancient Greek)' text"""
-
-					pass
-
-				# Should I alter parser to ignore 'Taxonomy (from ANCIENT GREEK...) start of article' situations?
 
 
 				contentParagraphs = page.find("div", id="mw-content-text").findAll("p", recursive=False)
 
 				firstParagraph, restParagraphs = contentParagraphs[0], contentParagraphs[1:]
 
+				firstSentence_index = cls.indexOfFirstPeriodElem(firstParagraph)
+				# index of element in firstParagraph's tag contents
+
+				firstSentence = u''.join(map(unicode, firstParagraph.contents[:firstSentence_index + 1]))
+				# string representation of all html up to and including first sentence
+				restOf_firstParagraph = firstParagraph.contents[firstSentence_index:]
+				# list of tags that follow the first sentence inner html
 
 
-				for para in contentParagraphs:
+				firstSentence_link = cls._firstSentenceLink(firstSentence)
+				# try to find a legal link from the first sentence
+
+				if firstSentence_link: return firstSentence_link
+				# return legal first sentence link if exists
+
+
+				for elem in restOf_firstParagraph:
+					# search through restOf_firstParagraph for <a> links
+					# return link if link is /wiki/...
+					if elem.name == 'a' and cls._wikilink_reg.match(elem['href']): 
+						return elem['href']
+
+
+				# find valid wikilinks in all paragraphs but the first
+				for para in restParagraphs:
 
 					matched = para.find("a", recursive=False, href=WikiCrawl._wikilink_reg)
+					# match only /wiki/... hrefs
 
 					if matched:
 						break
@@ -217,80 +241,83 @@ class WikiCrawl(object):
 			return regularPageFunc
 
 
-	@classmethod
-	def stripWikiURL(cls, wikiURL):
-	#def stripWikiURL(self, wikiURL):
-		"""Given part or whole wikiURL, returns the /wiki/... portion.
-		Raises exception if wikiURL does not match pattern"""
-
-
-		URL_ANCHOR_HASH_REG = re.compile(r'#.*$', re.DOTALL)
-		# match the \urlstuff#(anchor_location) portion of a url
-
-		stripped = URL_ANCHOR_HASH_REG.subn('', cls._wikilink_reg.search(wikiURL))
-		# find the /wiki/rest#anchor_location portion of a url, then strip
-		# off the #anchor_location
-
-
-		if stripped: return stripped.groups()[0]
-		else: raise CrawlError("URL doesn't match /wiki/... pattern")
 
 	@classmethod
-	def _isValidInFirstSentence(cls, wikilink, firstSentence):
+	def _firstSentenceLink(cls, bs4FirstParagraph):
 		"""Given the first paragraph of bs4Wikipage searches for wikilinks
 		that are not within '(...ancient greek...)' """
 
 		ILLEGAL_FIRSTSENTENCE_REG = lambda link: re.compile( 
 													r""" \( [^)] +?                    # left paren, anything but right paren
-											 		href=\" """ + wikilink + r""" \" # href(equals)"/wiki/topic"
+											 		href=\" """ + link + r""" \" # href(equals)"/wiki/topic"
 											 		[^)] *?  </a>[^)] *?  \)""",        # ... </a> ... first left paren seen
 													re.X)                               # verbose regex
 		# illegal formation for a hyperlink in the first sentence of a wikipage
 
+		potentialy_valid_wikilinks = cls._href_wikilink_reg.finditer(bs4FirstParagraph)
 
-		first_sentence = ''
+		for linkMatch in potentialy_valid_wikilinks:
+			linkText = linkMatch.groups()[0]
 
-		potentialy_valid_wikilinks = None
+			if not ILLEGAL_FIRSTSENTENCE_REG(linkText).search(bs4FirstParagraph):
+				# if this link doesn't match the illegal pattern, return link
+				return cls.URLify(linkText)
+		else:
+			return None
 
-		return tuple()
 
 	@staticmethod
-def indexOfFirstSentence(bs4Paragraph):
-	"""Find the navigable string element's index of the first
-	navigable string that contains a period"""
-	period_reg = re.compile(r'(\.)', re.U)
-	for navstring, index_in_navstrings in zip(bs4Paragraph.strings, count()):
-		# attempt to find a period in every navstring
-		matches = tuple(period_reg.finditer(navstring))
-		# matches will be a tuple of matchobjects
-		if matches:
-			# if period found, return its navstring's index in parent
+	def indexOfFirstPeriodElem(bs4Paragraph):
+		"""Find the navigable string element's index within contents
+		of the first navigable string that contains a period"""
+		period_reg = re.compile(r'(\.)', re.U)
+		for navstring, index_in_navstrings in zip(bs4Paragraph.strings, count()):
+			# attempt to find a period in every navstring
+			matches = tuple(period_reg.finditer(navstring))
+			# matches will be a tuple of matchobjects
 			if matches:
-				return charlepara.index(tuple(charlepara.strings)[index_in_navstrings])
-	else:
-		raise ValueError('This paragraph has no periods')
+				# if period found, return its navstring's index in parent
+				return bs4Paragraph.index(tuple(bs4Paragraph.strings)[index_in_navstrings])
+		else:
+			raise ValueError('This paragraph has no periods')
 
-
-		"""
-
-		period_matches = tuple(itertools.chain.from_iterable(
-							map(lambda string: period_reg.finditer(string), bs4Paragraph.strings)))
-		# matchobjects for all periods in the paragraph's navigable strings
-
-		if period_matches:
-			# index of period in
-			return = period_matches[0].start()
-		else: raise ValueError('This paragraph has no periods')
-
-		"""
 
 
 	@classmethod
-	def URLifyWikiExtension(cls, urlExtension):
-	#def URLifyWikiExtension(self, urlExtension):
-		"""Return urlExtension as a valid http://... wikipedia URL"""
+	def URLify(cls, urlSource):
+		"""OVERLOADED:
+			bs4.page: find Title on wikipage, append it to _wikipedia_Root
+			string: strip out /wiki/... from urlSource & produce full wikilink
+		"""
 
-		return unicode(cls._wikipedia_Root + cls.stripWikiURL(urlExtension))
+		def stripWikiUrl(wikiURL):
+			"""Given part or whole wikiURL, returns the /wiki/... portion.
+			Raises exception if wikiURL does not match pattern"""
+
+
+			URL_ANCHOR_HASH_REG = re.compile(r'#.*$', re.DOTALL)
+			# match the \urlstuff#(anchor_location) portion of a url
+
+			stripped = URL_ANCHOR_HASH_REG.sub('', cls._wikilink_reg.search(wikiURL).groups()[0])
+			# find the /wiki/rest#anchor_location portion of a url, then strip
+			# off the #anchor_location
+
+			if stripped: return stripped
+			else: raise CrawlError("URL doesn't match /wiki/... pattern")
+
+
+		if isinstance(urlSource, bs4.BeautifulSoup):
+			# if given page, find page title, urlify it, and create full wikilink
+			import urllib
+			return unicode(cls._wikipedia_Root +
+							'/wiki/' +
+							urllib.quote(cls.wikiTitle(urlSource)))
+
+		elif isinstance(urlSource, basestring):
+			return unicode(cls._wikipedia_Root + stripWikiUrl(urlSource))
+
+		else:
+			raise TypeError('Must pass bs4.BeautifulSoup or str')
 
 
 	@staticmethod
@@ -315,19 +342,26 @@ def indexOfFirstSentence(bs4Paragraph):
 		for _ in xrange(numRuns):
 		# run numruns times
 
+			"""DEBUG"""
+
 			self.navigate(self.currentURL)
 			# navigate changes currentURL to result of navigating last currentURL
+			# REDIRECTION: navigate will take in any url, but will account
+			# for urls that may yield redirection
 
 			self._nthSeen += 1
 			# increment number of pages seen
 
-			currentURLStripped = self.stripWikiURL(self.currentURL)
+			currentURLStripped = self.URLify(self.currentURL)
+
+			print 'just visited self.currentUrl %s\n' % (self.currentURL,)
+
 
 
 			nextLink = self.linkFinderFunc(self.currentPage)(self.currentPage)
 			# grab the next link from the current page
 
-			record = CrawlRecord(self.stripWikiURL(self.currentURL), 
+			record = CrawlRecord(self.URLify(self.currentURL), 
 									self.wikiTitle(self.currentPage),
 									self._nthSeen)
 			# create a record using the url just searched, title currently seen, and n
@@ -349,7 +383,7 @@ def indexOfFirstSentence(bs4Paragraph):
 				self._visitedURLs[currentURLStripped] = record
 				# insert this location into the hash
 
-				self.currentURL = self.URLifyWikiExtension(nextLink)
+				self.currentURL = self.URLify(nextLink)
 				# set the next-current url to the result of this page
 
 				sleep(WikiCrawl._CRAWL_WAIT_TIME)
@@ -362,7 +396,7 @@ def indexOfFirstSentence(bs4Paragraph):
 
 		if fileName: return fileName.replace('.csv', '') + '.csv'
 		# if name passed, use it; else name output first word seen by default
-		else: return self._visitedURLs[self.stripWikiURL(self.startURL)].word + '.csv'
+		else: return self._visitedURLs[self.URLify(self.startURL)].word + '.csv'
 
 
 
@@ -411,7 +445,7 @@ def indexOfFirstSentence(bs4Paragraph):
 		import csv
 		"""DEPRECATED"""
 
-		assert False
+		#assert False
 
 
 		headers = ['URL ID', 'Word', 'URL']
@@ -419,7 +453,7 @@ def indexOfFirstSentence(bs4Paragraph):
 
 		if fileName: name = fileName.replace('.csv', '') + '.csv'
 		# if name passed, use it; else name output first word seen by default
-		else: name = self._visitedURLs[self.stripWikiURL(self.startURL)].word + '.csv'
+		else: name = self._visitedURLs[self.URLify(self.startURL)].word + '.csv'
 
 		# FIX FILENAME/DIRECTORY SHIT
 		
@@ -511,6 +545,7 @@ def _run(argv):
 	except:
 		# directory already exists
 		OSError
+
 
 	if INPUT_URL: crawler = WikiCrawl(INPUT_URL)
 	else: crawler = WikiCrawl()
