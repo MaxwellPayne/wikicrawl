@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import requests, bs4, re, random, itertools
 import getopt, os, sys, collections, csv
 from time import sleep
@@ -21,52 +23,7 @@ Handle NUM_TRIALS better
 
 
 
-def chunk(fPath, size=65536):
-	"""IRRELEVAT USE OF FILE"""
-	"""Stream the contents of a file size at a time"""
-	if size > 65536:
-		raise ValueError('Too big a chunk size')
 
-	with open(fPath, 'r') as f:
-
-		while True:
-			b = f.read(size)
-			if not b: break
-			else: yield b
-
-def chooseRandLn(fPath):
-	"""IRRELEVAT USE OF FILE"""
-	"""Choose to read a line at random from a text file"""
-
-	numLines = sum([ch.count('\n') for ch in chunk(fPath)])
-	# count newlines in the file
-
-	#print "filelen should be %s" % numLines
-
-	chosenLine = random.randint(0, numLines - 1)
-
-	with open(fPath, 'r') as f:
-
-		for _ in xrange(chosenLine):
-			# consume a random number of lines
-			f.readline()
-
-		# return the chosen line
-		return f.readline()
-
-def randWikiStart(titleFilePath):
-	"""IRRELEVAT USE OF FILE"""
-	"""Reads random line from titleFilePath, converts what it finds to valid
-	wikipedia URL"""
-	import urllib
-
-	wikiWord = chooseRandLn(titleFilePath).rstrip('\n').replace(' ', '_')
-	# choose random line, strip newline, replace spaces with underscore
-
-	print 'wikiword %s' % wikiWord
-
-	return unicode('http://wikipedia.org/wiki/') + urllib.quote(wikiWord.encode('UTF-8'))
-	# return a unicode, url-safe url
 
 def csvHeadersExist(pth, headerLs, delimiter=','):
 	"""Checks to see if a csv file has headers in its first row"""
@@ -270,14 +227,51 @@ class WikiCrawl(object):
 	def indexOfFirstPeriodElem(bs4Paragraph):
 		"""Find the navigable string element's index within contents
 		of the first navigable string that contains a period"""
-		period_reg = re.compile(r'(\.)', re.U)
-		for navstring, index_in_navstrings in zip(bs4Paragraph.strings, count()):
+		#period_reg = re.compile(r'(\.)', re.U)
+		end_of_sentence_reg = re.compile(r'\.(?: [A-Z]|\[\d+\] )', re.U)
+		# ^find a period then either
+			# -- space after period followed by capital letter
+			# -- [number] immediately after period, follwed by space
+			# ---- ex. 'data[1] ' where [1] is a citation
+
+
+		"""
+		def endsOfSentences(textString):
+		#Returns matchobject containing end of sentence positions
+
+			end_of_sentence_reg = re.compile(r'((?:\.|\?|!) [A-Z])', re.U)
+
+			matched = end_of_sentence_reg.match(textString)
+
+			if matched: 
+				return tuple(matched.start(group = g) for g in len(matched.groups()))
+			else: 
+				return None
+		"""
+
+
+		all_navstrings = tuple(bs4Paragraph.strings)
+
+
+		all_navstrings_str = u''.join(all_navstrings)
+
+
+		for navstring, index_in_navstrings in zip(all_navstrings, count()):
 			# attempt to find a period in every navstring
-			matches = tuple(period_reg.finditer(navstring))
-			# matches will be a tuple of matchobjects
-			if matches:
-				# if period found, return its navstring's index in parent
-				return bs4Paragraph.index(tuple(bs4Paragraph.strings)[index_in_navstrings])
+
+			#print 'navstring %s groups %s' % (navstring, matches)
+
+			#if period_reg.search(navstring):
+			if u'.' in navstring:
+				# if period found in this navstring
+
+				if (index_in_navstrings == len(all_navstrings) - 1
+					# if last navstring in paragraph, assumed to be end-of-sentence
+					or end_of_sentence_reg.search(all_navstrings_str)):
+					# if a period at end-of-sentence, success
+
+					# if period found, return its navstring's index in parent
+					return bs4Paragraph.index(all_navstrings[index_in_navstrings])
 		else:
 			raise ValueError('This paragraph has no periods')
 
