@@ -21,6 +21,8 @@ Handle NUM_TRIALS better
 
 """
 
+"""Main self.URLify-ing should come from linkFinderFunc"""
+
 
 
 
@@ -44,7 +46,7 @@ class CrawlRecord(object):
 	"""Records data about the crawl of a given wikipedia page"""
 
 	def __init__(self, url, word, nth):
-		self.urlExtension = url
+		self.urlExtension = unicode(url)
 		self.word = word
 		self.nth = nth
 
@@ -76,12 +78,17 @@ class WikiCrawl(object):
 
 		if startURL:
 		# initialize with starting URL if present
-			self.startURL = startURL
+			startQuoted = self.URLify(startURL)
 		else:
 		# choose a random wiki page
-			self.startURL = self.wiki_randomURL()
+			startQuoted = self.URLify(self.wiki_randomURL())
 
-		self.currentURL = self.startURL
+		previewFirstPage = requests.get(startQuoted)
+		previewFirstPage = bs4.BeautifulSoup(previewFirstPage.text)
+		# the starting url must be normalized by visiting the site
+		self.startURL = self.URLify(previewFirstPage)
+
+		self.currentURL = startURL
 
 		self._visitedURLs = collections.OrderedDict()
 		# Myabe OrderedDict so you can see previous and next
@@ -121,6 +128,7 @@ class WikiCrawl(object):
 		# --This helps with redirection issues
 
 
+
 	@staticmethod
 	def is_disambiguation(bs4Page):
 		"""Is this page a disambiguation?"""
@@ -153,31 +161,17 @@ class WikiCrawl(object):
 
 
 
+
+
 				contentParagraphs = page.find("div", id="mw-content-text").findAll("p", recursive=False)
+
 
 				firstParagraph, restParagraphs = contentParagraphs[0], contentParagraphs[1:]
 
-				firstSentence_index = cls.indexOfFirstPeriodElem(firstParagraph)
-				# index of element in firstParagraph's tag contents
 
-				firstSentence = u''.join(map(unicode, firstParagraph.contents[:firstSentence_index + 1]))
-				# string representation of all html up to and including first sentence
-				restOf_firstParagraph = firstParagraph.contents[firstSentence_index:]
-				# list of tags that follow the first sentence inner html
+				linkInFirst = cls.firstParagraphLink(firstParagraph)
 
-
-				firstSentence_link = cls._firstSentenceLink(firstSentence)
-				# try to find a legal link from the first sentence
-
-				if firstSentence_link: return firstSentence_link
-				# return legal first sentence link if exists
-
-
-				for elem in restOf_firstParagraph:
-					# search through restOf_firstParagraph for <a> links
-					# return link if link is /wiki/...
-					if elem.name == 'a' and cls._wikilink_reg.match(elem['href']): 
-						return elem['href']
+				if linkInFirst: return cls.URLify(linkInFirst)
 
 
 				# find valid wikilinks in all paragraphs but the first
@@ -193,87 +187,142 @@ class WikiCrawl(object):
 
 				# find first <a> within paragraph whose href matched the reg pattern
 
-				return matched.get("href")
+				return self.URLify(matched.get("href"))
 
 			return regularPageFunc
 
 
 
 	@classmethod
-	def _firstSentenceLink(cls, bs4FirstParagraph):
-		"""Given the first paragraph of bs4Wikipage searches for wikilinks
-		that are not within '(...ancient greek...)' """
+	def firstParagraphLink(cls, bs4FirstParagraph):
 
-		ILLEGAL_FIRSTSENTENCE_REG = lambda link: re.compile( 
-													r""" \( [^)] +?                    # left paren, anything but right paren
-											 		href=\" """ + link + r""" \" # href(equals)"/wiki/topic"
-											 		[^)] *?  </a>[^)] *?  \)""",        # ... </a> ... first left paren seen
-													re.X)                               # verbose regex
-		# illegal formation for a hyperlink in the first sentence of a wikipage
-
-		potentialy_valid_wikilinks = cls._href_wikilink_reg.finditer(bs4FirstParagraph)
-
-		for linkMatch in potentialy_valid_wikilinks:
-			linkText = linkMatch.groups()[0]
-
-			if not ILLEGAL_FIRSTSENTENCE_REG(linkText).search(bs4FirstParagraph):
-				# if this link doesn't match the illegal pattern, return link
-				return cls.URLify(linkText)
-		else:
-			return None
-
-
-	@staticmethod
-	def indexOfFirstPeriodElem(bs4Paragraph):
-		"""Find the navigable string element's index within contents
-		of the first navigable string that contains a period"""
-		#period_reg = re.compile(r'(\.)', re.U)
-		end_of_sentence_reg = re.compile(r'\.(?: [A-Z]|\[\d+\] )', re.U)
-		# ^find a period then either
-			# -- space after period followed by capital letter
-			# -- [number] immediately after period, follwed by space
-			# ---- ex. 'data[1] ' where [1] is a citation
+		sanitizedParagraph = bs4FirstParagraph
+		"""WARNING: this destructively alters bs4FirstParagraph.
+		Can't figure out a way to copy the paragraph"""
 
 
 		"""
-		def endsOfSentences(textString):
-		#Returns matchobject containing end of sentence positions
+		from copy import deepcopy
 
-			end_of_sentence_reg = re.compile(r'((?:\.|\?|!) [A-Z])', re.U)
+		sanitizedParagraph = bs4.BeautifulSoup(unicode(bs4FirstParagraph.text))
 
-			matched = end_of_sentence_reg.match(textString)
+		deepcopy(bs4FirstParagraph)
 
-			if matched: 
-				return tuple(matched.start(group = g) for g in len(matched.groups()))
-			else: 
+		print 'sanitized paragraph is first paragrapg? %s' % (sanitizedParagraph is bs4FirstParagraph,)
+		print sanitizedParagraph.findAll('sup', {'class':'reference'})
+		"""
+
+		for cite in sanitizedParagraph.findAll('sup', {'class':'reference'}):
+			cite.extract()
+
+
+		def linkOutsideParens(paragraphHtml):
+
+			ILLEGAL_FIRSTSENTENCE_REG = lambda link: re.compile( 
+														r""" \( [^)] +?                    # left paren, anything but right paren
+												 		href=\" """ + link + r""" \" # href(equals)"/wiki/topic"
+												 		[^)] *?  </a>[^)] *?  \)""",        # ... </a> ... first left paren seen
+														re.X)                               # verbose regex
+			# illegal formation for a hyperlink in the first sentence of a wikipage
+
+				
+
+			potentialy_valid_wikilinks = cls._href_wikilink_reg.finditer(paragraphHtml)
+
+			for linkMatch in potentialy_valid_wikilinks:
+				linkText = linkMatch.groups()[0]
+
+				if not ILLEGAL_FIRSTSENTENCE_REG(linkText).search(paragraphHtml):
+					# if this link doesn't match the illegal pattern, return link
+					return cls.URLify(linkText)
+
+
+
+
+		def indexOfFirstSentence(bs4Paragraph):
+			#period_reg = re.compile(r'(\.)', re.U)
+			end_of_sentence_reg = re.compile(r'\.(?: [A-Z]|\[\d+\] )', re.U)
+			# ^find a period then either
+				# -- space after period followed by capital letter
+				# -- [number] immediately after period, follwed by space
+				# ---- ex. 'data[1] ' where [1] is a citation
+
+			all_navstrings = tuple(bs4Paragraph.strings)
+
+			all_navstrings_str = u''.join(all_navstrings)
+
+
+			for navstring, index_in_navstrings in zip(all_navstrings, count()):
+				# attempt to find a period in every navstring
+
+				#print 'navstring %s groups %s' % (navstring, matches)
+
+				#if period_reg.search(navstring):
+				if u'.' in navstring:
+					# if period found in this navstring
+
+					if (index_in_navstrings == len(all_navstrings) - 1
+						# if last navstring in paragraph, assumed to be end-of-sentence
+						or end_of_sentence_reg.search(all_navstrings_str)):
+						# if a period at end-of-sentence, success
+
+						# if period found, return its navstring's index in parent
+						return bs4Paragraph.index(all_navstrings[index_in_navstrings])
+			else:
+
+				print 'FIRST SENTENCE CANNOT BE SPLIT\n'
+
 				return None
-		"""
 
 
-		all_navstrings = tuple(bs4Paragraph.strings)
+		sentenceSplitIndex = indexOfFirstSentence(sanitizedParagraph)
+		# index of element in firstParagraph's tag contents
 
+		# attempt to cut the first paragraph with a period
+		# if possible, this will exclude the parenthese check for
+		# sentences other than the first
 
-		all_navstrings_str = u''.join(all_navstrings)
+		if sentenceSplitIndex:
+			"""If sentence can be split, split it into a firstSentence
+			string and a restOf array of bs4 elements. First look for valid
+			links within the firstSentence. If that fails, look for valid links
+			within the restOf. If both fail, return None because there ar NO
+			valid links within the first paragraph"""
 
+			
+			firstSentenceHtml = u''.join(map(unicode, sanitizedParagraph.contents[:sentenceSplitIndex + 1]))
+			# string representation of all html up to and including first sentence
+			restOf_firstParagraph = sanitizedParagraph.contents[sentenceSplitIndex:]
+			# list of tags that follow the first sentence inner html
 
-		for navstring, index_in_navstrings in zip(all_navstrings, count()):
-			# attempt to find a period in every navstring
+			firstSentence_link = linkOutsideParens(firstSentenceHtml)
 
-			#print 'navstring %s groups %s' % (navstring, matches)
+			if firstSentence_link:
+				# if valid link within first sentence, return it
+				return firstSentence_link
+				
+			else:
+				# look at rest of paragraph for valid links
+				for elem in restOf_firstParagraph:
+					# search through restOf_firstParagraph for <a> links
+					# return link if link is /wiki/...
+					if elem.name == 'a' and cls._wikilink_reg.match(elem['href']):
+						return elem['href']
 
-			#if period_reg.search(navstring):
-			if u'.' in navstring:
-				# if period found in this navstring
+				else:
+					# looked through both first sentence and rest, failed to find
+					return None
 
-				if (index_in_navstrings == len(all_navstrings) - 1
-					# if last navstring in paragraph, assumed to be end-of-sentence
-					or end_of_sentence_reg.search(all_navstrings_str)):
-					# if a period at end-of-sentence, success
-
-					# if period found, return its navstring's index in parent
-					return bs4Paragraph.index(all_navstrings[index_in_navstrings])
 		else:
-			raise ValueError('This paragraph has no periods')
+			"""Sentence cannot be split. Must apply the paren exclusion
+			search to the ENTIRE paragraph. This is undesireable b/c it
+			may exclude valid parentheses later on in the text"""
+
+
+			return linkOutsideParens(unicode(sanitizedParagraph))
+
+			
+
 
 
 
@@ -283,6 +332,7 @@ class WikiCrawl(object):
 			bs4.page: find Title on wikipage, append it to _wikipedia_Root
 			string: strip out /wiki/... from urlSource & produce full wikilink
 		"""
+		import urllib
 
 		def stripWikiUrl(wikiURL):
 			"""Given part or whole wikiURL, returns the /wiki/... portion.
@@ -296,18 +346,18 @@ class WikiCrawl(object):
 			# find the /wiki/rest#anchor_location portion of a url, then strip
 			# off the #anchor_location
 
-			if stripped: return stripped
+			if stripped: return urllib.quote(stripped)
 			else: raise CrawlError("URL doesn't match /wiki/... pattern")
 
 
 		if isinstance(urlSource, bs4.BeautifulSoup):
 			# if given page, find page title, urlify it, and create full wikilink
-			import urllib
 			return unicode(cls._wikipedia_Root +
 							'/wiki/' +
 							urllib.quote(cls.wikiTitle(urlSource)))
 
 		elif isinstance(urlSource, basestring):
+			print "URLification of %s to %s" % (urlSource, unicode(cls._wikipedia_Root + stripWikiUrl(urlSource)))
 			return unicode(cls._wikipedia_Root + stripWikiUrl(urlSource))
 
 		else:
@@ -333,10 +383,7 @@ class WikiCrawl(object):
 
 		# NEED TO HANDLE NOMATCH EXCEPTION, INFINITE LOOP EXCEPTION, DEADEND EXCEPTION
 
-		for _ in xrange(numRuns):
-		# run numruns times
-
-			"""DEBUG"""
+		def advanceCrawler():
 
 			self.navigate(self.currentURL)
 			# navigate changes currentURL to result of navigating last currentURL
@@ -346,7 +393,7 @@ class WikiCrawl(object):
 			self._nthSeen += 1
 			# increment number of pages seen
 
-			currentURLStripped = self.URLify(self.currentURL)
+			currentURLStripped = self.currentURL
 
 			print 'just visited self.currentUrl %s\n' % (self.currentURL,)
 
@@ -367,8 +414,8 @@ class WikiCrawl(object):
 				self._visitedURLs[currentURLStripped]
 
 				self._infRecord = record
-				break
-				# raise CrawlError('Key already visited, infinite loop')
+				
+				raise CrawlError('Key already visited, infinite loop')
 
 			except KeyError:
 				# url extension not visited yet, continue crawling
@@ -377,12 +424,25 @@ class WikiCrawl(object):
 				self._visitedURLs[currentURLStripped] = record
 				# insert this location into the hash
 
-				self.currentURL = self.URLify(nextLink)
+				self.currentURL = nextLink #self.URLify(nextLink)
 				# set the next-current url to the result of this page
+
+				print 'AdvanceCrawler: nextLink %s' % nextLink
 
 				sleep(WikiCrawl._CRAWL_WAIT_TIME)
 				# sleep to abide by robots.txt
-			
+
+
+		for _ in xrange(numRuns):
+		# run numruns - 1 times
+
+			try:
+				# crawler might hit infinite loop
+				advanceCrawler()
+
+			except CrawlError:
+				# infinite record hit, crawling complete
+				pass
 
 
 
@@ -445,9 +505,11 @@ class WikiCrawl(object):
 		headers = ['URL ID', 'Word', 'URL']
 		# csv column headers
 
+
+
 		if fileName: name = fileName.replace('.csv', '') + '.csv'
 		# if name passed, use it; else name output first word seen by default
-		else: name = self._visitedURLs[self.URLify(self.startURL)].word + '.csv'
+		else: name = self._visitedURLs[self.startURL].word + '.csv'
 
 		# FIX FILENAME/DIRECTORY SHIT
 		
