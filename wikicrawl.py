@@ -7,7 +7,8 @@ from time import sleep
 from itertools import count
 #from unicode_csv import UnicodeWriter
 
-
+class Ns():
+	pass
 
 """
 
@@ -27,6 +28,22 @@ Handle NUM_TRIALS better
 """Main self.URLify-ing should come from linkFinderFunc"""
 
 
+"""
+Exclusions:
+	- Fully italic links
+	- Fully bold links
+	- Anything in the first sentence that falls between parentheses
+	- Anything in a table
+
+Inclusions:
+	- Unordered Lists
+	- Ordered Lists
+
+
+"""
+
+
+
 
 
 
@@ -43,6 +60,11 @@ class CrawlError(Exception):
 
 		Exception.__init__(self)
 		self.message = message
+
+class DisambiguationError(CrawlError):
+
+	def __init__(self, message):
+		CrawlError.__init__(self, message)
 
 
 class CrawlRecord(object):
@@ -80,6 +102,13 @@ class WikiCrawl(object):
 	
 	def __init__(self, startURL = ''):
 
+		self._initialize(startURL)
+
+
+	def _initialize(self, startURL = ''):
+		"""Basically __init__ method, but can be reused
+		if the crawler has to be restarted"""
+
 		if startURL:
 		# initialize with starting URL if present
 			startQuoted = self.URLify(startURL)
@@ -106,6 +135,16 @@ class WikiCrawl(object):
 
 
 	@classmethod
+	def manualEntry(cls):
+		"""Manually enter a url"""
+
+		print '\a' * 2
+		# alert user of a problem
+
+		INPUT_MESSAGE = 'Manually enter the link to the next page: '
+		return cls.URLify(raw_input(INPUT_MESSAGE))
+
+	@classmethod
 	def wiki_randomURL(cls):
 		"""Returns a unicode url of a random wikipedia page"""
 		random_extension = '/wiki/Special:Random'
@@ -113,6 +152,23 @@ class WikiCrawl(object):
 		randPage = requests.get(cls._wikipedia_Root + random_extension)
 
 		return randPage.url
+
+	@classmethod
+	def WhitelsitedFailures(cls, title):
+
+		COMMUNITY = 'Community'
+		# inline text list: '1) blah blah and 2) blah'
+		# causes unbalanced parens
+
+		# COMMON_FAILURES is a dict of all common failure titles
+		# and their first link solution
+		COMMON_FAILURES = {COMMUNITY: 'Level_of_analysis#Meso-level',}
+
+		if title in COMMON_FAILURES:
+			print 'found title %s in dict: %s' % (title, COMMON_FAILURES[title])
+			return cls.URLify('/wiki/' + COMMON_FAILURES[title])
+		else:
+			return None
 
 
 	def navigate(self):
@@ -143,6 +199,13 @@ class WikiCrawl(object):
 
 
 				if elem.name == 'p':
+
+					if elem.find(lambda e: (e.name == 'span' 
+								 and 'style' in e.attrs
+								 and e['style'] == 'font-size: small;')):
+						# top right corner small text paragraphs; aren't
+						# real meat of the article
+						elem.extract()
 
 					
 
@@ -228,7 +291,7 @@ class WikiCrawl(object):
 			# assumption is not yet proven
 
 			def disambigFunc(page):
-				raise CrawlError('Hit a disambiguation at %s' % bs4Page.url)
+				raise DisambiguationError('Hit a disambiguation')
 
 			return disambigFunc
 
@@ -332,49 +395,75 @@ class WikiCrawl(object):
 			RIGHT_PAREN_REG = re.compile(r'[^(]* \) [^(]*', re.VERBOSE)
 			# ) with no (
 
-			left_outstanding = False
+			closure = Ns()
+			closure.left_seen, closure.right_seen = 0, 0
+
+			def incrParens(s):
+
+				for char in s:
+					if char == '(': closure.left_seen += 1
+					elif char == ')': closure.right_seen += 1
+			
+			def emptyCache():
+				"""Eradicate every element in the deletable_cache"""
+
+				for e in reversed(deletable_cache):
+					#print 'time to delete %s' % e
+					# clear cache
+
+					
+					try:
+						#print 'deletable cache before %s' % deletable_cache
+						deletable_cache.remove(e)
+						#print 'deletable_cache after %s' % deletable_cache
+						elemLs.remove(e)
+
+					except ValueError:
+						# element already deleted by parent tag's deletion
+						#print 'had trouble removing %s' % e
+						pass
+
+					e.extract()
+
+
+			
 			deletable_cache = []
 
-			for elem, i in zip(elemLs, count()):
+			elemLs_clone = tuple(elem for elem in elemLs)
+			# will be destructively mutating elemLs during iteration
+			# so want to keep a clone purely for iteration purposes
 
-				if not left_outstanding:
-					# haven't seen left
+			for elem in elemLs_clone:
 
-					if (isinstance(elem, bs4.NavigableString) 
-						and LEFT_PAREN_REG.search(elem)):
-						# found the left
+				#print '\nexamining %s, cache is %s, LR(%i, %i)\n' % (elem, deletable_cache, closure.left_seen, closure.right_seen)
 
-						left_outstanding = True
-						# flag found left is true
+				if closure.left_seen > closure.right_seen:
+					# left paren prevails, add elements to cache
+					deletable_cache.append(elem)
+
+				elif closure.left_seen == closure.right_seen:
+
+					#print 'deleting %s of len %s\n' % (deletable_cache, len(deletable_cache))
+					# right paren just equaled
+
+					emptyCache()
+
 
 				else:
-					# have seen left, waiting for right
+					# right parens outweigh left parens,
+					# this imbalance shouldn't happen on wikipedia
+					raise CrawlError('This page has unbalanced Parens')
 
-					if (isinstance(elem, bs4.NavigableString)
-						and RIGHT_PAREN_REG.search(elem)):
 
-						# found right paren
+				if isinstance(elem, bs4.NavigableString):
+					# if working with navstring, recalculate parens
+					incrParens(elem)
 
-						left_outstanding = False
+			else:
+				# empty the cache at the end of the function
 
-						# found left false
-
-						for e in deletable_cache:
-							# clear cache
-
-							e.extract()
-
-							try:
-								elemLs.remove(e)
-							except ValueError:
-								# element already deleted by parent tag's deletion
-								pass
-
-		
-
-					else:
-						# didnt find a right this time, add to cache
-						deletable_cache.append(elem)
+				if closure.left_seen == closure.right_seen:
+					emptyCache()
 
 
 
@@ -396,7 +485,7 @@ class WikiCrawl(object):
 			Chester_A_Arthur_reg = re.compile(r'[A-Z][a-z]+ [A-Z]\. [A-Z][a-z]+', re.U)
 			# prevent names (Chester A(.) Arthur) from being matched
 
-			Title_Suffix_Reg = re.compile('(?:Mr|Mrs|Ms|Sr|Jr|Dr)\.')
+			Blacklisted_Period_reg = re.compile('(?:Mr|Mrs|Ms|Sr|Jr|Dr|lat)\.', re.U | re.I)
 
 
 
@@ -427,16 +516,16 @@ class WikiCrawl(object):
 
 				if (period_reg.search(navstring) 
 					and not Chester_A_Arthur_reg.search(navstring)
-					and not Title_Suffix_Reg.search(navstring)):
+					and not Blacklisted_Period_reg.search(navstring)):
 
-						#print 'within ' + str(all_navstrings)
-						#print 'lies %s' % all_navstrings[index_in_navstrings]
+						print 'within ' + str(all_navstrings)
+						print 'lies %s' % all_navstrings[index_in_navstrings]
 
 						# if period found, return its navstring's index in parent
 						return bs4Paragraph.index(all_navstrings[index_in_navstrings])
 			else:
 
-				print 'FIRST SENTENCE CANNOT BE SPLIT\n'
+				print 'FIRST SENTENCE:\n %s\n CANNOT BE SPLIT\n' % ''.join(bs4Paragraph)
 
 				return None
 
@@ -569,33 +658,50 @@ class WikiCrawl(object):
 
 		def advanceCrawler():
 
-			self.navigate()
-			# navigate changes currentURL to result of navigating last currentURL
-			# REDIRECTION: navigate will take in any url, but will account
-			# for urls that may yield redirection
+			try:
 
-			self._nthSeen += 1
-			# increment number of pages seen
+				self.navigate()
+				# navigate changes currentURL to result of navigating last currentURL
+				# REDIRECTION: navigate will take in any url, but will account
+				# for urls that may yield redirection
 
-			currentURLStripped = self.currentURL
+				self._nthSeen += 1
+				# increment number of pages seen
 
-			print 'just visited self.currentUrl %s\n' % (self.currentURL,)
+				print 'just visited self.currentUrl %s\n' % (self.currentURL,)
 
 
 
-			nextLink = self.linkFinderFunc(self.currentPage)(self.currentPage)
-			# grab the next link from the current page
+				nextLink = self.linkFinderFunc(self.currentPage)(self.currentPage)
+				# grab the next link from the current page
+
+			except CrawlError as e:
+
+				if isinstance(e, DisambiguationError):
+					# Disambiguation Errors cause the crawl to halt and
+					# must be handled at a higher level
+					raise e
+
+				else:
+					# Other Crawl Errors can be migigated by manual entry
+					print 'Error crawling %s: %s' % (self.currentURL, e.message)
+
+					whitelisted = self.WhitelsitedFailures(
+														self.wikiTitle(self.currentPage))
+
+					nextLink = whitelisted if whitelisted else self.manualEntry()
+					# if the failure is whitelisted use its solution, else manual entry
+
 
 			record = CrawlRecord(self.currentURL, 
 									self.wikiTitle(self.currentPage),
 									self._nthSeen)
-			# create a record using the url just searched, title currently seen, and n
-
+				# create a record using the url just searched, title currently seen, and n
 
 
 			try: 
 				# if hashkey exists, we're in an infinite crawl loop
-				self._visitedURLs[currentURLStripped]
+				self._visitedURLs[self.currentURL]
 
 				self._infRecord = record
 				
@@ -605,7 +711,7 @@ class WikiCrawl(object):
 				# url extension not visited yet, continue crawling
 
 
-				self._visitedURLs[currentURLStripped] = record
+				self._visitedURLs[self.currentURL] = record
 				# insert this location into the hash
 
 				self.currentURL = nextLink #self.URLify(nextLink)
@@ -624,7 +730,14 @@ class WikiCrawl(object):
 				# crawler might hit infinite loop
 				advanceCrawler()
 
-			except CrawlError:
+			except CrawlError as e:
+
+				if isinstance(e, DisambiguationError):
+					print '\a'
+					print e.message
+					self.restart(numRuns)
+
+
 				# infinite record hit, crawling complete
 				break
 
@@ -726,17 +839,17 @@ class WikiCrawl(object):
 		return self._visitedURLs
 		# does this really need a return value?
 
-	def flush(self):
+	def restart(self, numRuns,  startURL = ''):
 		"""Return all properties to pre-crawl status"""
-		self.currentURL = self.startURL
-		self._visitedURLs = collections.OrderedDict()
-		self.currentPage = None
-		self._nthSeen = 0
-		self._infRecord = None
+
+		self._initialize(startURL)
+		self.crawl(numRuns)
+
 
 
 
 def _run(argv):
+	import traceback
 
 
 	def usage():
@@ -793,18 +906,30 @@ def _run(argv):
 		# directory already exists
 		OSError
 
+	try:
 
-	if INPUT_URL: crawler = WikiCrawl(INPUT_URL)
-	else: crawler = WikiCrawl()
+		if INPUT_URL: crawler = WikiCrawl(INPUT_URL)
+		else: crawler = WikiCrawl()
 
-	#else: crawler = WikiCrawl(randWikiStart('enwiki-latest-all-titles-in-ns0'))
-	"""DEPRECATED b/c no longer using the wiki text file, instead using /wiki/Special:Random"""
+		#else: crawler = WikiCrawl(randWikiStart('enwiki-latest-all-titles-in-ns0'))
+		"""DEPRECATED b/c no longer using the wiki text file, instead using /wiki/Special:Random"""
 
-	crawler.crawl(NUM_TRIALS)
+		crawler.crawl(NUM_TRIALS)
 
-	os.chdir('Trials_Results')
+		os.chdir('Trials_Results')
 
-	crawler.writeCSV(fileName = CSV_NAME, directory=CSV_DIRECTORY)
+		crawler.writeCSV(fileName = CSV_NAME, directory=CSV_DIRECTORY)
+
+	except Exception as e:
+		# any program-terminating exception
+		# alert user
+		traceback.print_exc()
+
+		print 'Fatal error: %s' % e.message
+
+		if type(e) != KeyboardInterrupt:
+
+			print '\a' * 5
 
 
 
