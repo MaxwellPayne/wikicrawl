@@ -66,6 +66,11 @@ class DisambiguationError(CrawlError):
 	def __init__(self, message):
 		CrawlError.__init__(self, message)
 
+class DeadEndError(CrawlError):
+
+	def __init__(self, message):
+		CrawlError.__init__(self, message)
+
 
 class CrawlRecord(object):
 	"""Records data about the crawl of a given wikipedia page"""
@@ -132,6 +137,7 @@ class WikiCrawl(object):
 
 		self._infRecord = None
 		# temporary holding cell for the infinity record if there is one
+		self._stepsToInfRecord = None
 
 
 	@classmethod
@@ -177,6 +183,8 @@ class WikiCrawl(object):
 		def sanitizePage(soup, boldLinks=False, italLinks=False):
 			"""Remove unwanted elements from the bs4"""
 
+			from sets import Set
+
 			DIRTY_ELEMENT_NAMES = ('p', 'li', 'sup', 'i', 'b', 'span')
 
 			content_text = soup.find('div', id='mw-content-text')
@@ -184,7 +192,7 @@ class WikiCrawl(object):
 			
 
 			try:
-				nav_tables = content_text.findAll('table', {'class': 'vertical-navbox nowraplinks'})
+				nav_tables = content_text.findAll('table')
 				for t in nav_tables:
 					#print t
 					t.extract()
@@ -193,6 +201,18 @@ class WikiCrawl(object):
 				# didn't find any bad tables
 				pass
 
+
+			IPA_CLASS_BLACKLIST = ('IPA', 'IPA nopopups')
+			# delete all spans associated with class 'IPA'
+			IPA_spans = content_text.findAll(lambda e: (e.name == 'span'
+											 and 'class' in e.attrs
+											 and (bool(Set(e['class']) & Set(IPA_CLASS_BLACKLIST)))),
+											 recursive = True)
+
+			for span in IPA_spans:
+				span.extract()
+
+
 			dirty_elements = content_text.findAll(lambda elem: elem.name in DIRTY_ELEMENT_NAMES)
 
 			for elem in dirty_elements:
@@ -200,9 +220,8 @@ class WikiCrawl(object):
 
 				if elem.name == 'p':
 
-					if elem.find(lambda e: (e.name == 'span' 
-								 and 'style' in e.attrs
-								 and e['style'] == 'font-size: small;')):
+
+					if elem.find('span', {'style' : 'font-size: small;'}):
 						# top right corner small text paragraphs; aren't
 						# real meat of the article
 						elem.extract()
@@ -215,6 +234,11 @@ class WikiCrawl(object):
 						# <p><b>BOLD LINK</b></p>
 						elem.extract()
 
+					if not tuple(elem.strings):
+						# paragraph has no navstrings inside of it
+						# ex. <p><br></p>
+						elem.extract()
+
 
 
 				if not italLinks and elem.name == 'i':
@@ -225,18 +249,6 @@ class WikiCrawl(object):
 					# delete <b> tags and their children
 					# don't want <b><a>...BOLD LINK</a></b>
 					elem.extract()
-
-				if elem.name == 'span':
-
-
-					try:
-						if elem['class'] == 'IPA':
-							elem.extract()
-					except KeyError: pass
-					# elem['class'] doesn't necessarily exist
-
-
-
 				
 
 					
@@ -305,11 +317,14 @@ class WikiCrawl(object):
 
 				ELEMENT_STRAINER = lambda elem: elem.name in ('p', 'ol', 'ul')
 				# look for these types of elements
+				NULL_PARAGRAPH = bs4.BeautifulSoup('<p></p>')
+				# used as a dummy value if the page is empty
 
 				contents = page.find("div", id="mw-content-text").findAll(ELEMENT_STRAINER, recursive=False)
 
 
-				firstParagraph, restContents = contents[0], contents[1:]
+				firstParagraph = contents[0] if contents != [] else NULL_PARAGRAPH
+				restContents = contents[1:]
 
 
 				linkInFirst = cls.firstParagraphLink(firstParagraph)
@@ -328,7 +343,7 @@ class WikiCrawl(object):
 					if matched:
 						break
 				else:
-					raise CrawlError("No valid wikilinks exist on current page")
+					raise DeadEndError("No valid wikilinks exist on current page")
 
 				# find first <a> within paragraph whose href matched the reg pattern
 
@@ -360,6 +375,8 @@ class WikiCrawl(object):
 
 		def linkOutsideParens(paragraphHtml):
 			"""DEPRECATED"""
+
+			assert False
 
 
 
@@ -403,7 +420,10 @@ class WikiCrawl(object):
 				for char in s:
 					if char == '(': closure.left_seen += 1
 					elif char == ')': closure.right_seen += 1
-			
+
+
+			deletable_cache = []
+
 			def emptyCache():
 				"""Eradicate every element in the deletable_cache"""
 
@@ -426,8 +446,6 @@ class WikiCrawl(object):
 					e.extract()
 
 
-			
-			deletable_cache = []
 
 			elemLs_clone = tuple(elem for elem in elemLs)
 			# will be destructively mutating elemLs during iteration
@@ -485,7 +503,7 @@ class WikiCrawl(object):
 			Chester_A_Arthur_reg = re.compile(r'[A-Z][a-z]+ [A-Z]\. [A-Z][a-z]+', re.U)
 			# prevent names (Chester A(.) Arthur) from being matched
 
-			Blacklisted_Period_reg = re.compile('(?:Mr|Mrs|Ms|Sr|Jr|Dr|lat)\.', re.U | re.I)
+			Blacklisted_Period_reg = re.compile('(?:Mr|Mrs|Ms|Sr|Jr|Dr|lat|sing)\.', re.U | re.I)
 
 
 
@@ -520,12 +538,13 @@ class WikiCrawl(object):
 
 						print 'within ' + str(all_navstrings)
 						print 'lies %s' % all_navstrings[index_in_navstrings]
+						print 'at %i' % index_in_navstrings
 
 						# if period found, return its navstring's index in parent
 						return bs4Paragraph.index(all_navstrings[index_in_navstrings])
 			else:
 
-				print 'FIRST SENTENCE:\n %s\n CANNOT BE SPLIT\n' % ''.join(bs4Paragraph)
+				print 'FIRST SENTENCE:\n %s\n CANNOT BE SPLIT\n' % ''.join(map(str, bs4Paragraph))
 
 				return None
 
@@ -539,57 +558,50 @@ class WikiCrawl(object):
 
 		if sentenceSplitIndex:
 			"""If sentence can be split, split it into a firstSentence
-			string and a restOf array of bs4 elements. First look for valid
-			links within the firstSentence. If that fails, look for valid links
-			within the restOf. If both fail, return None because there ar NO
-			valid links within the first paragraph"""
+			string and a restOf array of bs4 elements. Sanitize the firstSentenceElements
+			by stripping out anything between parens, then rejoin the
+			firstSentenceElements with the restOf_firstParagraph"""
 
 			firstSentenceElements = bs4FirstParagraph.contents[:sentenceSplitIndex + 1]
+			# all the tags up to and including the end-of-first-sentence inner html
 
 			restOf_firstParagraph = bs4FirstParagraph.contents[sentenceSplitIndex:]
 			# list of tags that follow the first sentence inner html
 
-			# run the paren cutter on the first sentence
 			cutWithinParens(firstSentenceElements)
-			
-			firstSentenceHtml = u''.join(map(unicode, bs4FirstParagraph.contents[:sentenceSplitIndex + 1]))
-			# string representation of all html up to and including first sentence
+			# cleanse the firstSentenceElements so all <a>'s inside parens are deleted
 
-			"""
-			DEPRECATED REGEX-BASED WAY OF FINDING FIRST SENTENCE
+			searchableElements = firstSentenceElements + restOf_firstParagraph
+			# join the sanitized firstSentenceElements with the
+			# untouched restOf_firstParagraph
 
-			firstSentence_link = linkOutsideParens(firstSentenceHtml)
 
-			if firstSentence_link:
-				# if valid link within first sentence, return it
-				return firstSentence_link
-			"""
-			if False:
-				pass
-				
-			else:
-				# look at rest of paragraph for valid links
-				#for elem in restOf_firstParagraph:
-				# ^USED WITH THE REGEX APPROACH
 
-				for elem in firstSentenceElements + restOf_firstParagraph:
 
-					# search through restOf_firstParagraph for <a> links
-					# return link if link is /wiki/...
-					if elem.name == 'a' and cls._wikilink_reg.match(elem['href']):
-						return cls.URLify(elem['href'])
-
-				else:
-					# looked through both first sentence and rest, failed to find
-					return None
 
 		else:
 			"""Sentence cannot be split. Must apply the paren exclusion
-			search to the ENTIRE paragraph. This is undesireable b/c it
-			may exclude valid parentheses later on in the text"""
+			cleansing to the ENTIRE paragraph. This is undesireable b/c it
+			may exclude valid parentheses outside of the first sentence"""
 
 
-			return linkOutsideParens(unicode(bs4FirstParagraph))
+			searchableElements = [elem for elem in bs4FirstParagraph.contents]
+			# all content elements are treated equally, regardless
+			# of first sentence's status b/c it cannot be determined
+
+			cutWithinParens(searchableElements)
+			# apply paren exclusion to entire first paragraph
+
+
+		for elem in searchableElements:
+			# search through paragraph elements for valid wikilinks
+
+			if elem.name == 'a' and cls._wikilink_reg.match(elem['href']):
+				return cls.URLify(elem['href'])
+
+		else:
+			# looked through both first sentence and rest, failed to find
+			return None
 
 			
 
@@ -644,7 +656,7 @@ class WikiCrawl(object):
 
 		header = bs4Page.find("h1", id="firstHeading")
 
-		return header.string
+		return header.text
 
 	
 	def nextWikiLink(self, page):
@@ -677,7 +689,7 @@ class WikiCrawl(object):
 
 			except CrawlError as e:
 
-				if isinstance(e, DisambiguationError):
+				if isinstance(e, DisambiguationError) or isinstance(e, DeadEndError):
 					# Disambiguation Errors cause the crawl to halt and
 					# must be handled at a higher level
 					raise e
@@ -704,6 +716,7 @@ class WikiCrawl(object):
 				self._visitedURLs[self.currentURL]
 
 				self._infRecord = record
+				self._stepsToInfRecord = self._visitedURLs[self.currentURL].nth
 				
 				raise CrawlError('Key already visited, infinite loop')
 
@@ -738,8 +751,12 @@ class WikiCrawl(object):
 					self.restart(numRuns)
 
 
-				# infinite record hit, crawling complete
-				break
+				elif isinstance(e, DeadEndError):
+					raise e
+
+				else:
+					# infinite record hit, crawling complete
+					break
 
 	@staticmethod
 	def _mapEncode(ls, encoding='utf-8'):
@@ -863,7 +880,7 @@ def _run(argv):
 
 
 	try:
-		opts, args = getopt.getopt(argv, 'hn:', ['help', 'csv-directory=', 'csv-name='])
+		opts, args = getopt.getopt(argv, 'hn:', ['help', 'debug', 'csv-directory=', 'csv-name='])
 		# maybe add an output directory for experiment results
 	except getopt.GetoptError:
 		usage()
@@ -898,10 +915,16 @@ def _run(argv):
 	if '--csv-name' in optDict.keys():
 		CSV_NAME = optDict['--csv-name']
 
+	if '--debug' in optDict.keys(): DEBUG = True
+	else: DEBUG = False
+
 
 	# do I really need to mkdir?
 	try:
-		os.mkdir('Trials_Results')
+
+		out_dir = 'Trials_Results' if DEBUG else 'Real_Deal_Trials'
+
+		os.mkdir(out_dir)
 	except:
 		# directory already exists
 		OSError
@@ -916,7 +939,7 @@ def _run(argv):
 
 		crawler.crawl(NUM_TRIALS)
 
-		os.chdir('Trials_Results')
+		os.chdir(out_dir)
 
 		crawler.writeCSV(fileName = CSV_NAME, directory=CSV_DIRECTORY)
 
@@ -927,9 +950,11 @@ def _run(argv):
 
 		print 'Fatal error: %s' % e.message
 
-		if type(e) != KeyboardInterrupt:
+		if type(e) != KeyboardInterrupt and not DEBUG:
 
 			print '\a' * 5
+
+		exit(1)
 
 
 
