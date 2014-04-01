@@ -1,6 +1,6 @@
 #!/bin/sh
 
-for fname in Real_Deal_Trials/*
+for fname in Data_Collection/*
 do
 	#echo "$(wc -l $fname)"
 	echo "$(wc -l "$fname")"

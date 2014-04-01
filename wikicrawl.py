@@ -74,15 +74,12 @@ class DeadEndError(CrawlError):
 
 class CrawlRecord(object):
 	"""Records data about the crawl of a given wikipedia page"""
-
 	def __init__(self, url, word, nth):
 		self.urlExtension = unicode(url)
-		self.word = word
+		self.word = unicode(word)
 		self.nth = nth
-
 	def __repr__(self):
 		return 'CrawlRecord URL: %s, word %s, nth %s' % (self.urlExtension, self.word, self.nth)
-
 	def listForCSV(self):
 		"""Create list of properties the way they will be written to the CSV columns"""
 		# hash value of self.word will produce unique primary key
@@ -536,9 +533,9 @@ class WikiCrawl(object):
 					and not Chester_A_Arthur_reg.search(navstring)
 					and not Blacklisted_Period_reg.search(navstring)):
 
-						print 'within ' + str(all_navstrings)
-						print 'lies %s' % all_navstrings[index_in_navstrings]
-						print 'at %i' % index_in_navstrings
+						#print 'within ' + str(all_navstrings)
+						#print 'lies %s' % all_navstrings[index_in_navstrings]
+						#print 'at %i' % index_in_navstrings
 
 						# if period found, return its navstring's index in parent
 						return bs4Paragraph.index(all_navstrings[index_in_navstrings])
@@ -762,37 +759,62 @@ class WikiCrawl(object):
 	def _mapEncode(ls, encoding='utf-8'):
 		return [unicode(s).encode(encoding) for s in ls]
 
-	def _csvPath(self, fileName = None, directory = ''):
+	def _csvPath(self, fileName = None, dirName = ''):
+		"""Output path for any csv file generated"""
 
-		if fileName: return fileName.replace('.csv', '') + '.csv'
+		if fileName: fileName = fileName.replace('.csv', '') + '.csv'
 		# if name passed, use it; else name output first word seen by default
-		else: return self._visitedURLs[self.URLify(self.startURL)].word + '.csv'
+		else: fileName = self._visitedURLs[self.URLify(self.startURL)].word + '.csv'
+
+		if not dirName: dirName = os.getcwd()
+
+		return os.path.join(dirName, fileName)
 
 
 
 	def verboseCSV(self, fileName = None, directory = '', delim = ','):
 		"""Writes the path of all word seen on a traversal"""
+		""" nth Word       Subject Area   HashVal
+			1   Word1                     -123342324234
+			2   Word2                      ...etc
+			3   Loop Word
+			4   Word3
+			5   Loop Word
+
+			3   Loop Word                 -234245436346"""
+
+		HEADERS = [u'Nth', u'Word', u'Subject Area', u'Unique Identifier']
 
 		pth = self._csvPath(fileName, directory)
 		
 		visited = self._visitedURLs.values()
 
-		row = self._mapEncode(
-			[hash(visited[0])] + 
-			map(lambda record: record.word, self._visitedURLs.values()))
-		# Array starting with hashval of first word
-		# followed by every single word seen
+		ROW_GEN_FUNC = lambda record: [unicode(record.nth), 
+										record.word,
+										u'',
+										hash(record.word)]
 
-		if self._infRecord: row = row.append(self._infRecord)
+
+		loopRow = ROW_GEN_FUNC(self._infRecord) if self._infRecord else []
 		# append the inf record to words seen if it has been encountered
 
-		with codecs.open(pth, 'a', encoding='utf-8') as f:
-			excelWriter = csv.writer(f, delimiter = delim)
-			excelWriter.writeRow(row)
+		with open(pth, 'w+') as f:
+			excelWriter = unicodecsv.writer(f, delimiter = delim, encoding = 'utf-8')
+			excelWriter.writerow(HEADERS)
+
+			for record in self._visitedURLs.values():
+				excelWriter.writerow(ROW_GEN_FUNC(record))
+			if loopRow:
+				excelWriter.writerow(loopRow)
+				excelWriter.writerow(['' for i in xrange(4)])
+				first_visit_to_inf = self._visitedURLs[self._infRecord.urlExtension]
+				excelWriter.writerow(ROW_GEN_FUNC(first_visit_to_inf))
 
 
 	def summaryCSV(self, fileName = None, directory = '', delim = ','):
 		"""Writes startWord hash, startWord, last unique word, numSeen, and infWord if exists"""
+
+		assert False
 		
 
 		pth = self._csvPath(fileName, directory)
@@ -812,6 +834,9 @@ class WikiCrawl(object):
 			if os.path.getsize(pth) == 0:
 				excelWriter.writeRow(headers)
 			excelWriter.writeRow(row)
+
+		print 'Written %s' % name
+		print name
 
 
 	def writeCSV(self, fileName=None, directory=''):
@@ -904,6 +929,8 @@ def _run(argv):
 		NUM_TRIALS = int(optDict['-n'])
 		# handle invalid argument (bad number)
 
+	if '--debug' in optDict.keys(): DEBUG = True
+	else: DEBUG = False
 	
 
 	if '-h' in optDict.keys() or '--help' in optDict.keys():
@@ -912,19 +939,17 @@ def _run(argv):
 
 	if '--csv-directory' in optDict.keys():
 		CSV_DIRECTORY = optDict['--csv-directory']
+	else:
+		CSV_DIRECTORY = 'Real_Deal_Trials' if DEBUG else 'Data_Collection'
+
 	if '--csv-name' in optDict.keys():
 		CSV_NAME = optDict['--csv-name']
 
-	if '--debug' in optDict.keys(): DEBUG = True
-	else: DEBUG = False
 
 
 	# do I really need to mkdir?
 	try:
-
-		out_dir = 'Trials_Results' if DEBUG else 'Real_Deal_Trials'
-
-		os.mkdir(out_dir)
+		os.mkdir(CSV_DIRECTORY)
 	except:
 		# directory already exists
 		OSError
@@ -939,9 +964,8 @@ def _run(argv):
 
 		crawler.crawl(NUM_TRIALS)
 
-		os.chdir(out_dir)
-
-		crawler.writeCSV(fileName = CSV_NAME, directory=CSV_DIRECTORY)
+		#crawler.writeCSV(fileName = CSV_NAME, directory=CSV_DIRECTORY)
+		crawler.verboseCSV(fileName = CSV_NAME, directory=CSV_DIRECTORY)
 
 	except Exception as e:
 		# any program-terminating exception
