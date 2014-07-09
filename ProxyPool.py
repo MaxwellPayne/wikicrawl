@@ -3,7 +3,7 @@ import time
 
 
 from Queue import Queue
-from threading import Thread
+from threading import Thread, Lock
 
 class ProxyProtocol:
     http = 'http'
@@ -19,34 +19,36 @@ class ProxyPool(object):
         self._untested = Queue(maxsize=test_buffer_size)
         self._proxies = Queue(maxsize=pool_size)
         self.openFile = open(self.files.pop(0), 'r')
+        #self._fileLock = Lock()
 
         """Init refilling thread"""
         def testAndPut(ip):
             def callback():
                 print 'try refil %s' % ip
-                if proxyIsValid(ip):
+                if self.proxyIsValid(ip):
                     self.untested.put(ip)
-                return callback
+            return callback
         
         def masterRefillThread():
             print 'THE MASTER LIVES'
             while True:
                 if not self._untested.full():
                     newIP = self._readIP()
-                    
+                    print 'newIP in master is %s' % newIP
                     filler = Thread(target=testAndPut(newIP))
                     filler.setDaemon(True)
                     filler.start()
                 time.sleep(0.01)
 
-        masterRefiller = Thread(target=masterRefillThread)
-        masterRefiller.setDaemon(True)
-        masterRefiller.start()
+        self._masterRefiller = Thread(target=masterRefillThread)
+        self._masterRefiller.setDaemon(True)
+        self._masterRefiller.start()
 
         #time.sleep(self.INIT_WAIT_TIME)
 
     def __del__(self):
         print '__del__'
+        self._masterRefiller.kill()
         if self.openFile and not self.openFile.closed():
             self.openFile.close()
 
@@ -74,13 +76,19 @@ class ProxyPool(object):
     def _readIP(self):
         print 'readIP'
         try:
-            return self.openFile.readline().rstrip()
+            ip = self.openFile.readline().rstrip()
+            if not ip: raise EOFError('')
+            return ip
         except EOFError:
             self.openFile.close()
             if not self.files:
+                print "NO more files"
                 raise EOFError("No more IP Files")
             self.openFile = open(self.files.pop(0), 'r')
             return openFile.readline().rstrip()
+        except Exception:
+            print '_readIP was programmed poorly'
+            exit(1)
 
     def putBack(self, ip, delay=0):
         print 'putBack'
