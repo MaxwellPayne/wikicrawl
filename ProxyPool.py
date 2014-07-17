@@ -49,7 +49,7 @@ class ProxyPool(object):
             return callback
         
         def masterRefillThread():
-            print 'THE MASTER LIVES'
+            #print 'THE MASTER LIVES'
             while not self._timeToExit.isSet():
                 if not self._proxies.full() and not self._openFile.closed:
                     try:
@@ -86,7 +86,7 @@ class ProxyPool(object):
 
     @staticmethod
     def isIPv4(ipStr):
-        print 'isIPv4'
+        #print 'isIPv4'
         try:
             byteArray = map(int, ipStr.split(':')[0].split('.'))
             byteTest = [byte for byte in byteArray if byte >= 0 and byte <= 255]
@@ -100,7 +100,7 @@ class ProxyPool(object):
         proxyDict = {protocol: 'http://' + ip for protocol in ('http', 'https', 'ftp')}
         try:
             r = requests.get(cls.VERIFY_URL, proxies=proxyDict)
-            print ('is valid %s? %s' % (ip, r.text.rstrip() == ip.split(':')[0]))
+            #print ('is valid %s? %s' % (ip, r.text.rstrip() == ip.split(':')[0]))
             return r.text.rstrip() == ip.split(':')[0]
         except (requests.HTTPError, requests.ConnectionError, socket.error) as e:
             return False
@@ -144,7 +144,7 @@ class ProxyPool(object):
         thread.start()
 
     def get(self, block=True, timeout=None):
-        print 'get'
+        #print 'get'
         return self._proxies.get(block=block, timeout=timeout)
 
 def _main():
