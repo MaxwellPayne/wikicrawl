@@ -1,73 +1,74 @@
 import cPickle
 
 from Queue import Queue
+from threading import Lock
 
 import Categorizer
 
 from LockedObjectMixin import LockedObjectMixin
 
-def LockedDictFactory(pickleTo=None, unpickleFrom=None):
 
-    class LockedDict(dict, LockedObjectMixin):
+class LockedDict(dict, LockedObjectMixin):
 
-        def __init__(self, pickleTo=None):
-            dict.__init__(self)
-            LockedObjectMixin.__init__(self)
-            self.pickleTo = pickleTo if pickleTo else None
+    def __init__(self):
+        dict.__init__(self)
+        LockedObjectMixin.__init__(self)
 
-        """Subclass of dict that prevents existing keys from being overwritten, unless expcility done via the overwrite() method"""
-        def set(self, key, value):
-            if key in self:
-                raise KeyError("Key %s already mapped to %s, cannot alter existing relationship by setting directly" % (key, value))
-            dict.__setitem__(self, key, value)
+    """Subclass of dict that prevents existing keys from being overwritten, unless expcility done via the overwrite() method"""
+    def set(self, key, value):
+        if key in self:
+            raise KeyError("Key %s already mapped to %s, cannot alter existing relationship by setting directly" % (key, value))
+        dict.__setitem__(self, key, value)
 
-        def __setitem__(self, key, value):
-            self.set(key, value)
+    def __setitem__(self, key, value):
+        self.set(key, value)
 
-        def overwrite(self, key, value):
-            if key not in self:
-                raise KeyError("Cannot overwrite %s because it is not currently a key" % key)
-            dict.__setitem__(self, key, value)
+    def overwrite(self, key, value):
+        if key not in self:
+            raise KeyError("Cannot overwrite %s because it is not currently a key" % key)
+        dict.__setitem__(self, key, value)
 
-        def serialize(self, pickleTo=None):
-            pth = pickleTo or self.pickleTo
-            if not pth: raise cPickle.PickleError("Object never given a picklePath")
-            with open(pth, 'wb') as f:
-                cPickle.dump(self, f)
-
-
-    if unpickleFrom:
-        with open(unpickleFrom, 'rb') as f:
-            obj = cPickle.load(f)
-        return obj
-    else:
-        return LockedDict(pickleTo=pickleTo)
 
 
 
 
 class TreeAscensionSearch(object):
 
-    def __init__(self):
+    def __init__(self, unpickleDictFrom=None, pickleDictTo=None):
+        if unpickleDictFrom:
+            with open(unpickleDictFrom, 'rb') as f:
+                self.cache = cPickle.load(f)
+                self.cache.lock = Lock()
+        else:
+            self.cache = LockedDict()
+        self.pickleDictTo = pickleDictTo
         self._searchQueue = Queue()
 
+        
+
+    def __del__(self):
+        if self.pickleDictTo:
+            cache, lock = self.cache, self.cache.lock
+            self.cache.lock = None
+            with open(self.pickleDictTo, 'wb') as f:
+                cPickle.dump(self.cache, f)
+            self.cache.lock = lock
 
 
 def _main():
     pth = 'pickled-category-cache'
 
-    d = LockedDictFactory(pickleTo=pth)
+    t = TreeAscensionSearch(pickleDictTo=pth)
 
+    with t.cache as c:
+        t.cache['hi'] = 1
 
-    
+    del t
 
-    with d as unlocked:
-        unlocked['hi'] = 2
+    t2 = TreeAscensionSearch(unpickleDictFrom=pth)
 
-    d.serialize()
-
-    d2 = LockedDictFactory(unpickleFrom=pth)
-    print d2
+    with t2.cache as c:
+        print c
 
 if __name__ == '__main__':
     _main()

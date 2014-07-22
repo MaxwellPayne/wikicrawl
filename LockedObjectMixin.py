@@ -3,14 +3,14 @@ from threading import Lock
 class LockedObjectMixin(object):
 
     def __init__(self):
-        self._lock = Lock()
+        self.lock = Lock()
 
     def __enter__(self):
-        self._lock.acquire()
+        self.lock.acquire()
         return self
 
     def __exit__(self, type, value, traceback):
-        self._lock.release()
+        self.lock.release()
 
 
 
