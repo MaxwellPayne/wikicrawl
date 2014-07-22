@@ -10,21 +10,15 @@ from Queue import Queue
 from copy import deepcopy
 
 from ProxyPool import ProxyPool
+from LockedObjectMixin import LockedObjectMixin
+
 
 class LockedObject(object):
     def __init__(self, obj, copy=True):
         self.obj = deepcopy(obj) if copy else obj
         self.lock = threading.Lock()
         #self.obj = self._subclassObj(deepcopy(obj) if copy else obj)
-    """def __getattr__(self, name):
-        if name == 'obj':
-            return deepcopy(self._obj)
-        else:
-            raise AttributeError("LockedObject can only access 'obj' property")
-    def __setattr__(self, name, value):
-            if name == 'obj':
-                with self._lock:
-                    self._obj = value"""
+
 
 
 
@@ -69,11 +63,11 @@ class RecursiveSearchThread(threading.Thread):
 
 #----------------------------------------------------------------------
 
-def CategorizerFactory(IPFiles, name=None, args=(), kwargs={}):
+def CategorizerFactory(IPFiles, name=None, proxyPool=None, args=(), kwargs={}):
 
     class Categorizer(RecursiveSearchThread):
 
-        PROXY_POOL = ProxyPool(IPFiles)
+        PROXY_POOL = proxyPool if proxyPool else ProxyPool(IPFiles)
         FOUND_CATEGORY = LockedObject(None)
         TOPLEVEL = ['History', 'Science']
         _wikipedia_Root = 'http://wikipedia.org'
@@ -111,13 +105,16 @@ def CategorizerFactory(IPFiles, name=None, args=(), kwargs={}):
                 return bool(cls.FOUND_CATEGORY.obj)
 
         def category(self):
-            if self.goalAchieved():
-                found = self.__class__.FOUND_CATEGORY
-                with found.lock:
-                    return found.obj
-            else:
+            if not self.goalAchieved():
                 self.start()
-                self.wait(self.timeout)
+                self.wait(self.timeout);
+
+            lockedFound = self.__class__.FOUND_CATEGORY
+            with lockedFound.lock:
+                if lockedFound.obj: 
+                    return lockedFound.obj
+            
+            raise Exception('category timed out')
 
         def searchForChildren(self):
 
@@ -173,7 +170,7 @@ def _main():
     c = Categorizer('Philosophy_of_history')
     #r = RecursiveSearchThread(str)
     #print str(c.page)[:200]
-    print c.category()
+    print 'category is: %s' % str(c.category())
     """
     for pg in ("Academia", "Society", "Research"):
         q.put(pg)
